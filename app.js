@@ -7,6 +7,7 @@ const seriesRouter = require('./routes/seriesRoutes');
 const teamRouter = require('./routes/teamRoutes');
 const matchRouter = require('./routes/matchRoutes');
 const standingRouter = require('./routes/standingRoutes');
+const fixture = require('./routes/fixtureRoutes')
 
 const app = express();
 
@@ -20,5 +21,6 @@ app.use('/api/series', seriesRouter);
 app.use('/api/teams', teamRouter);
 app.use('/api/matches', matchRouter);
 app.use('/api/standings', standingRouter);
+app.use('/api/fixture/', fixture)
 
 module.exports = app;
