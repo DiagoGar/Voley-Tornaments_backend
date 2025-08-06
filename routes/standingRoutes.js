@@ -3,8 +3,19 @@ const router = express.Router();
 const Standing = require('../models/Standing');
 
 router.get('/', async (req, res) => {
-  const standings = await Standing.find().populate(['team', 'serie']);
-  res.json(standings);
+  try {
+    const standings = await Standing.find()
+      .populate('team')
+      .populate({
+        path: 'serie',
+        populate: { path: 'category' }
+      });
+
+    res.json(standings);
+  } catch (error) {
+    console.error('Error al obtener standings:', error);
+    res.status(500).json({ error: 'Error al obtener standings' });
+  }
 });
 
 router.post('/', async (req, res) => {
