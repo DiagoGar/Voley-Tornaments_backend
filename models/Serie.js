@@ -10,6 +10,6 @@ const SerieSchema = new mongoose.Schema({
     ref: 'Category',
     required: true
   }
-});
+}, {timestamps: true});
 
 module.exports = mongoose.model('Serie', SerieSchema);
