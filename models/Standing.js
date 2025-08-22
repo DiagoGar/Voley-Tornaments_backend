@@ -5,7 +5,6 @@ const StandingSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Team',
     required: true,
-    unique: true
   },
   serie: {
     type: mongoose.Schema.Types.ObjectId,
@@ -20,5 +19,7 @@ const StandingSchema = new mongoose.Schema({
   points: { type: Number, default: 0 },
   position: { type: Number, default: null }
 });
+
+StandingSchema.index({ team: 1, serie: 1 }, { unique: true });
 
 module.exports = mongoose.model('Standing', StandingSchema);
