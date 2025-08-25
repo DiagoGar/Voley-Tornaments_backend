@@ -284,57 +284,6 @@ router.post('/next-round/:categoryId', async (req, res) => {
   }
 });
 
-// router.post('/finales/:categoryId', async (req, res) => {
-//   try {
-//     const { categoryId } = req.params;
-
-//     // Buscar todas las series de esta categoría
-//     const series = await Serie.find({ category: categoryId });
-
-//     if (!series.length) {
-//       return res.status(404).json({ error: 'No se encontraron series para esta categoría' });
-//     }
-
-//     let winners = [];
-
-//     // Obtener el primer lugar de cada serie
-//     for (const serie of series) {
-//       const posiciones = await calcularPosiciones(serie._id);
-//       if (posiciones.length > 0) {
-//         winners.push(posiciones[0].teamId); // Solo primer lugar
-//       }
-//     }
-
-//     if (winners.length < 2) {
-//       return res.status(400).json({ error: 'No hay suficientes ganadores para generar finales' });
-//     }
-    
-//     const nuevaSerie = await Serie.create({
-//       name: 'Finales',
-//       category: categoryId
-//     });
-
-//     await Promise.all(
-//       winners.map(teamId =>
-//         Team.updateOne({ _id: teamId }, { serie: nuevaSerie._id })
-//       )
-//     );
-
-//     await generarFixture(nuevaSerie._id);
-
-//     res.status(200).json({
-//       message: 'Finales creadas correctamente',
-//       nuevaSerieId: nuevaSerie._id,
-//       addedTeams: winners.length
-//     });
-
-//   } catch (error) {
-//     console.error('Error en /finales:', error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
-
-
 router.put('/:id', async (req, res) => {
   try {
     const matchId = req.params.id;
