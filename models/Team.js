@@ -18,7 +18,9 @@ const TeamSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Serie',
     required: true
-  }
+  },
+
+  tournament: { type: mongoose.Schema.Types.ObjectId, ref: "Tournament", required: true }
 });
 
 module.exports = mongoose.model('Team', TeamSchema);

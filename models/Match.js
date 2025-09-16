@@ -25,7 +25,9 @@ const MatchSchema = new mongoose.Schema({
   winner: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Team'
-  }
+  },
+
+  tournament: { type: mongoose.Schema.Types.ObjectId, ref: "Tournament", required: true }
 });
 
 module.exports = mongoose.model('Match', MatchSchema);
