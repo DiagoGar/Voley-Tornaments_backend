@@ -2,11 +2,12 @@ const express = require("express");
 const router = express.Router();
 const Match = require("../models/Match");
 const Standing = require("../models/Standing");
-const Serie = require('../models/Serie');
+const Serie = require("../models/Serie");
 const Team = require("../models/Team");
+const Tournament = require("../models/Tournament");
 
 //helper
-const isEliminationName = (name = '') =>
+const isEliminationName = (name = "") =>
   /(final|semifinal|cuartos|elimin|ronda)/i.test(name);
 
 const sortStandings = (a, b) => {
@@ -20,48 +21,88 @@ const sortStandings = (a, b) => {
   return diffB - diffA;
 };
 
+// GET matches con filtro por torneo
 router.get("/", async (req, res) => {
-  const matches = await Match.find().populate([
-    "teamA",
-    "teamB",
-    "serie",
-    "winner",
-  ]);
-  res.json(matches);
+  try {
+    const { tournamentId, serieId } = req.query;
+
+    const filter = {};
+    if (tournamentId) filter.tournament = tournamentId;
+    if (serieId) filter.serie = serieId;
+
+    const matches = await Match.find(filter).populate([
+      "teamA",
+      "teamB",
+      "serie",
+      "tournament",
+      "winner",
+    ]);
+
+    res.json(matches);
+  } catch (error) {
+    console.error("Error al obtener partidos:", error);
+    res.status(500).json({ error: "Error al obtener partidos" });
+  }
 });
 
 router.post("/", async (req, res) => {
   try {
-    const { teamA, teamB, serie, result } = req.body;
+    const { teamA, teamB, serie, tournament, result } = req.body;
 
-    if (!teamA || !teamB || !serie || !result) {
+    if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
     const { pointsA, pointsB } = result;
 
+    // Validar que los equipos pertenecen al torneo
+    const torneo = await Tournament.findById(tournament).populate("teams");
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    const teamIds = torneo.teams.map((t) => t._id.toString());
+
+    if (!teamIds.includes(teamA) || !teamIds.includes(teamB)) {
+      return res
+        .status(400)
+        .json({ error: "Los equipos no pertenecen a este torneo" });
+    }
+
+    // Crear partido
     const match = new Match({
       teamA,
       teamB,
       serie,
+      tournament,
       result: { pointsA, pointsB },
       winner: pointsA > pointsB ? teamA : teamB,
     });
 
     await match.save();
 
+    // Vincular el partido al torneo
+    torneo.matches.push(match._id);
+    await torneo.save();
+
+    // 🔹 Actualizar Standing en el contexto del torneo
     const updateStanding = async (
       teamId,
       pointsFor,
       pointsAgainst,
       isWinner
     ) => {
-      let standing = await Standing.findOne({ team: teamId });
+      let standing = await Standing.findOne({
+        team: teamId,
+        serie,
+        tournament,
+      });
 
       if (!standing) {
         standing = new Standing({
           team: teamId,
-          serie: null,
+          serie,
+          tournament,
           matchesPlayed: 0,
           wins: 0,
           losses: 0,
@@ -96,229 +137,302 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.post('/next-round/:categoryId', async (req, res) => {
+// Avanzar a la siguiente fase de un torneo
+router.post("/next-round/:tournamentId", async (req, res) => {
   try {
-    const { categoryId } = req.params;
+    const { tournamentId } = req.params;
 
-    // Todas las series de la categoría
-    const allSeries = await Serie.find({ category: categoryId }).sort({ _id: 1 }).exec();
-    if (!allSeries.length) {
-      return res.status(404).json({ error: 'No hay series para esta categoría' });
+    // Traer torneo con categoría
+    const tournament = await Tournament.findById(tournamentId).populate("category");
+    if (!tournament) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
     }
 
-    const elimSeries = allSeries.filter(s => isEliminationName(s.name));
-    const groupSeries = allSeries.filter(s => !isEliminationName(s.name));
+    // Todas las series del torneo
+    const allSeries = await Serie.find({ tournament: tournamentId }).sort({ _id: 1 });
+    if (!allSeries.length) {
+      return res.status(404).json({ error: "No hay series para este torneo" });
+    }
 
-    // ===== CASO 1: aún NO hay eliminatorias -> unificar campeones de A, B, ...
+    const elimSeries = allSeries.filter((s) => isEliminationName(s.name));
+    const groupSeries = allSeries.filter((s) => !isEliminationName(s.name));
+
+    // ===== CASO 1: aún NO hay eliminatorias -> crear primera fase
     if (elimSeries.length === 0) {
-      // Verificar que TODAS las series de fase regular estén cerradas
+      // Verificar que todas las series regulares estén cerradas
       for (const serie of groupSeries) {
-        const openMatch = await Match.findOne({ serie: serie._id, winner: { $exists: false } });
+        const openMatch = await Match.findOne({
+          serie: serie._id,
+          winner: { $exists: false },
+        });
         if (openMatch) {
           return res.status(400).json({
-            error: `La serie "${serie.name}" aún tiene partidos sin cerrar`
+            error: `La serie "${serie.name}" aún tiene partidos sin cerrar`,
           });
         }
       }
 
-      // Tomar el 1º de cada serie segun standings
+      // Tomar campeones de cada serie
       const winners = [];
       for (const serie of groupSeries) {
         const st = await Standing.find({ serie: serie._id });
         if (!st.length) continue;
         st.sort(sortStandings);
-        winners.push(st[0].team); // ObjectId del equipo campeón de esa serie
+        winners.push(st[0].team);
       }
 
-      // Quitar duplicados por si acaso
-      const uniqueWinners = [...new Set(winners.map(id => id.toString()))];
-
+      const uniqueWinners = [...new Set(winners.map((id) => id.toString()))];
       if (uniqueWinners.length < 2) {
-        // Si hay 0 o 1 ganadores, no tiene sentido crear eliminatoria
         if (uniqueWinners.length === 1) {
-          return res.json({ message: 'Torneo finalizado. Campeón encontrado', champion: uniqueWinners[0] });
+          return res.json({
+            message: "Torneo finalizado. Campeón encontrado",
+            champion: uniqueWinners[0],
+          });
         }
-        return res.status(400).json({ error: 'No hay suficientes campeones para crear eliminatorias' });
+        return res.status(400).json({ error: "No hay suficientes campeones" });
       }
 
-      // Crear serie "Finales" (o "Eliminatorias")
       const nuevaSerie = await Serie.create({
-        name: uniqueWinners.length === 2 ? 'Final' : 'Finales',
-        category: categoryId
+        name: uniqueWinners.length === 2 ? "Final" : "Finales",
+        tournament: tournamentId,
+        category: tournament.category,
+        autoQualified: [], // inicializamos
       });
 
-      // Mover equipos ganadores a la nueva serie
       await Team.updateMany(
         { _id: { $in: uniqueWinners } },
         { serie: nuevaSerie._id }
       );
 
-      // Reset/crear standings para la nueva serie (usando tu schema con unique por team)
+      // Crear standings
       for (const teamId of uniqueWinners) {
-        await Standing.updateOne(
-          { team: teamId }, // 1 único standing por team (se "traslada" de serie)
-          {
-            $set: {
-              team: teamId,
-              serie: nuevaSerie._id,
-              matchesPlayed: 0,
-              wins: 0,
-              losses: 0,
-              pointsFor: 0,
-              pointsAgainst: 0,
-              points: 0,
-            }
-          },
-          { upsert: true }
-        );
+        await Standing.create({
+          team: teamId,
+          serie: nuevaSerie._id,
+          tournament: tournamentId,
+          category: tournament.category,
+          matchesPlayed: 0,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          points: 0,
+        });
       }
 
-      // Generar fixture por pares
+      // Fixture con bye
       const createdMatches = [];
+      const autoWinners = [];
+
       for (let i = 0; i < uniqueWinners.length; i += 2) {
         if (i + 1 < uniqueWinners.length) {
           const m = await Match.create({
             teamA: uniqueWinners[i],
             teamB: uniqueWinners[i + 1],
-            serie: nuevaSerie._id
+            serie: nuevaSerie._id,
+            tournament: tournamentId,
           });
           createdMatches.push(m._id);
+        } else {
+          autoWinners.push(uniqueWinners[i]); // ⬅️ guardamos bye
         }
       }
 
+      nuevaSerie.autoQualified = autoWinners;
+      await nuevaSerie.save();
+
       return res.json({
-        message: `Serie "${nuevaSerie.name}" creada con ${uniqueWinners.length} equipos`,
+        message: `Serie "${nuevaSerie.name}" creada`,
         addedTeams: uniqueWinners.length,
-        createdMatches
+        createdMatches,
+        autoQualified: autoWinners,
       });
     }
 
-    // ===== CASO 2: ya hay eliminatorias -> avanzar dentro de ellas
-    // Tomamos la eliminatoria más reciente
+    // ===== CASO 2: ya hay eliminatorias -> avanzar ronda
     const currentElim = elimSeries[elimSeries.length - 1];
+    const matches = await Match.find({ serie: currentElim._id, tournament: tournamentId });
 
-    // Verificar que todos los partidos de la fase actual estén cerrados
-    const matches = await Match.find({ serie: currentElim._id });
     if (!matches.length) {
       return res.status(400).json({ error: `No hay partidos en "${currentElim.name}"` });
     }
-    if (matches.some(m => !m.winner)) {
+    if (matches.some((m) => !m.winner)) {
       return res.status(400).json({ error: `No todos los partidos de "${currentElim.name}" están finalizados` });
     }
 
-    // Ganadores de la fase
-    const winners = matches.map(m => m.winner.toString());
-    const uniqueWinners = [...new Set(winners)];
+    // Ganadores
+    const winners = matches.map((m) => m.winner.toString());
 
-    if (uniqueWinners.length === 1) {
-      return res.json({ message: 'Torneo finalizado. Campeón encontrado', champion: uniqueWinners[0] });
+    // Traer standings
+    const standings = await Standing.find({ serie: currentElim._id, tournament: tournamentId });
+    const equiposIds = standings.map((s) => s.team.toString());
+
+    // Equipos que jugaron realmente
+    const playedTeams = matches.flatMap((m) => [m.teamA.toString(), m.teamB.toString()]);
+
+    // Recuperar los byes guardados
+    const byeTeams = currentElim.autoQualified?.map((id) => id.toString()) || [];
+
+    // Los que avanzan = ganadores + byes
+    const allQualified = [...new Set([...winners, ...byeTeams])];
+
+    if (allQualified.length === 1) {
+      return res.json({
+        message: "Torneo finalizado. Campeón encontrado",
+        champion: allQualified[0],
+      });
     }
 
-    // Determinar siguiente fase
     let nextSerieName;
-    switch (uniqueWinners.length) {
+    switch (allQualified.length) {
       case 8:
-        nextSerieName = 'Cuartos de final';
+        nextSerieName = "Cuartos de final";
         break;
       case 4:
-        nextSerieName = 'Semifinales';
+        nextSerieName = "Semifinales";
         break;
       case 2:
-        nextSerieName = 'Final';
+        nextSerieName = "Final";
         break;
       default:
-        nextSerieName = `Ronda ${uniqueWinners.length}`;
+        nextSerieName = `Ronda ${allQualified.length}`;
     }
 
     const nuevaSerie = await Serie.create({
       name: nextSerieName,
-      category: categoryId
+      tournament: tournamentId,
+      category: tournament.category,
+      autoQualified: [],
     });
 
     await Team.updateMany(
-      { _id: { $in: uniqueWinners } },
+      { _id: { $in: allQualified } },
       { serie: nuevaSerie._id }
     );
 
-    // Reset/crear standings para la nueva serie
-    for (const teamId of uniqueWinners) {
-      await Standing.updateOne(
-        { team: teamId },
-        {
-          $set: {
-            team: teamId,
-            serie: nuevaSerie._id,
-            matchesPlayed: 0,
-            wins: 0,
-            losses: 0,
-            pointsFor: 0,
-            pointsAgainst: 0,
-            points: 0,
-          }
-        },
-        { upsert: true }
-      );
+    // Crear standings
+    for (const teamId of allQualified) {
+      await Standing.create({
+        team: teamId,
+        serie: nuevaSerie._id,
+        tournament: tournamentId,
+        category: tournament.category,
+        matchesPlayed: 0,
+        wins: 0,
+        losses: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+        points: 0,
+      });
     }
 
+    // Fixture con bye
     const createdMatches = [];
-    for (let i = 0; i < uniqueWinners.length; i += 2) {
-      if (i + 1 < uniqueWinners.length) {
+    const autoWinners = [];
+
+    for (let i = 0; i < allQualified.length; i += 2) {
+      if (i + 1 < allQualified.length) {
         const m = await Match.create({
-          teamA: uniqueWinners[i],
-          teamB: uniqueWinners[i + 1],
-          serie: nuevaSerie._id
+          teamA: allQualified[i],
+          teamB: allQualified[i + 1],
+          serie: nuevaSerie._id,
+          tournament: tournamentId,
         });
         createdMatches.push(m._id);
+      } else {
+        autoWinners.push(allQualified[i]);
       }
     }
 
-    res.json({
-      message: `Serie "${nextSerieName}" creada con ${uniqueWinners.length} equipos`,
-      addedTeams: uniqueWinners.length,
-      createdMatches
-    });
+    nuevaSerie.autoQualified = autoWinners;
+    await nuevaSerie.save();
 
+    res.json({
+      message: `Serie "${nextSerieName}" creada`,
+      addedTeams: allQualified.length,
+      createdMatches,
+      autoQualified: autoWinners,
+    });
   } catch (error) {
-    console.error('Error en next-round:', error);
+    console.error("Error en next-round:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
     const matchId = req.params.id;
-    const { teamA, teamB, serie, result } = req.body;
+    const { teamA, teamB, serie, tournament, result } = req.body;
 
-    if (!teamA || !teamB || !serie || !result) {
-      return res.status(400).json({ error: 'Faltan datos obligatorios' });
+    if (!teamA || !teamB || !serie || !tournament || !result) {
+      return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
     if (result.pointsA === result.pointsB) {
-      return res.status(400).json({ error: 'No puede haber empate en vóley' });
+      return res.status(400).json({ error: "No puede haber empate en vóley" });
     }
 
     const existingMatch = await Match.findById(matchId);
     if (!existingMatch) {
-      return res.status(404).json({ error: 'Partido no encontrado' });
+      return res.status(404).json({ error: "Partido no encontrado" });
     }
 
+    // Validar que los equipos pertenezcan al torneo
+    const torneo = await Tournament.findById(tournament);
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+    if (!torneo.teams.includes(teamA) || !torneo.teams.includes(teamB)) {
+      return res
+        .status(400)
+        .json({ error: "Uno o ambos equipos no pertenecen a este torneo" });
+    }
+
+    // Actualizar partido
     existingMatch.teamA = teamA;
     existingMatch.teamB = teamB;
     existingMatch.serie = serie;
+    existingMatch.tournament = tournament;
     existingMatch.result = result;
     existingMatch.winner = result.pointsA > result.pointsB ? teamA : teamB;
     await existingMatch.save();
 
-    const matches = await Match.find({ serie });
-    await Standing.deleteMany({ serie });
+    // Recalcular standings de la serie dentro del torneo
+    const matches = await Match.find({ serie, tournament });
+    await Standing.deleteMany({ serie, tournament });
 
     for (const match of matches) {
-      const teamAStanding = await Standing.findOne({ team: match.teamA, serie }) 
-        || new Standing({ team: match.teamA, serie, matchesPlayed: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0, points: 0 });
+      if (!match.result) continue; // partidos aún sin resultado
 
-      const teamBStanding = await Standing.findOne({ team: match.teamB, serie }) 
-        || new Standing({ team: match.teamB, serie, matchesPlayed: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0, points: 0 });
+      const teamAStanding =
+        (await Standing.findOne({ team: match.teamA, serie, tournament })) ||
+        new Standing({
+          team: match.teamA,
+          serie,
+          tournament,
+          matchesPlayed: 0,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          points: 0,
+        });
 
+      const teamBStanding =
+        (await Standing.findOne({ team: match.teamB, serie, tournament })) ||
+        new Standing({
+          team: match.teamB,
+          serie,
+          tournament,
+          matchesPlayed: 0,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          points: 0,
+        });
+
+      // Actualizar estadísticas
       teamAStanding.matchesPlayed += 1;
       teamBStanding.matchesPlayed += 1;
 
@@ -344,11 +458,12 @@ router.put('/:id', async (req, res) => {
       await teamBStanding.save();
     }
 
-    res.json({ message: 'Partido actualizado y standings recalculados correctamente' });
-
+    res.json({
+      message: "Partido actualizado y standings recalculados correctamente",
+    });
   } catch (err) {
-    console.error('Error actualizando partido:', err);
-    res.status(500).json({ error: 'Error del servidor' });
+    console.error("Error actualizando partido:", err);
+    res.status(500).json({ error: "Error del servidor" });
   }
 });
 
