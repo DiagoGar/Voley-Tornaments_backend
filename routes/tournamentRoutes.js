@@ -2,9 +2,10 @@
 const express = require("express");
 const router = express.Router();
 const Tournament = require("../models/Tournament.js");
+const authMiddleware = require("../middlewares/authMiddleware.js");
 
 // Crear torneo
-router.post("/", async (req, res) => {
+router.post("/", authMiddleware, async (req, res) => {
   try {
     const { name, category } = req.body;
 
@@ -12,23 +13,24 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "La categoría es obligatoria" });
     }
 
-    const torneo = new Tournament({ name, category });
+    const torneo = new Tournament({ name, category, user: req.user._id });
     await torneo.save();
     res.status(201).json(torneo);
   } catch (error) {
-    res.status(500).json({ error: "Error al crear torneo", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Error al crear torneo", details: error.message });
   }
 });
 
-
 // Listar torneos
-router.get("/", async (req, res) => {
-  const torneos = await Tournament.find();
+router.get("/", authMiddleware, async (req, res) => {
+  const torneos = await Tournament.find({ user: req.user._id });
   res.json(torneos);
 });
 
 // Obtener un torneo por ID
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware, async (req, res) => {
   try {
     const torneo = await Tournament.findById(req.params.id)
       .populate("category")
@@ -47,10 +49,8 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-
 // Finalizar torneo
-
-router.put("/:id/finalize", async (req, res) => {
+router.put("/:id/finalize", authMiddleware, async (req, res) => {
   try {
     const torneo = await Tournament.findById(req.params.id);
     if (!torneo) {
@@ -76,6 +76,5 @@ router.put("/:id/finalize", async (req, res) => {
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
-
 
 module.exports = router;

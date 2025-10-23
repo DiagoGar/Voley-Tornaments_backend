@@ -1,17 +1,16 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Serie = require('../models/Serie');
-const Tournament = require('../models/Tournament');
+const Serie = require("../models/Serie");
+const Tournament = require("../models/Tournament");
 
-
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const { tournamentId } = req.query;
     const query = tournamentId ? { tournament: tournamentId } : {};
 
     const series = await Serie.find(query)
-      .populate('category')
-      .populate('tournament');
+      .populate("category")
+      .populate("tournament");
 
     res.json(series);
   } catch (err) {
@@ -25,6 +24,15 @@ router.post("/", async (req, res) => {
 
     if (!name || !category || !tournament) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
+    }
+
+    const torneo = Tournament.findById(tournament)
+    if (torneo.status === "closed") {
+      return res
+        .status(403)
+        .json({
+          error: "El torneo está finalizado. No se permiten más cambios.",
+        });
     }
 
     // Crear la serie
@@ -45,10 +53,17 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete("/:id", async (req, res) => {
+  if (torneo.status === "closed") {
+    return res
+      .status(403)
+      .json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
+  }
   try {
     await Serie.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Serie eliminada' });
+    res.json({ message: "Serie eliminada" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

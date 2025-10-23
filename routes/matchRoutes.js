@@ -48,6 +48,11 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { teamA, teamB, serie, tournament, result } = req.body;
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
+    }
 
     if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
@@ -143,13 +148,23 @@ router.post("/next-round/:tournamentId", async (req, res) => {
     const { tournamentId } = req.params;
 
     // Traer torneo con categoría
-    const tournament = await Tournament.findById(tournamentId).populate("category");
+    const tournament = await Tournament.findById(tournamentId).populate(
+      "category"
+    );
     if (!tournament) {
       return res.status(404).json({ error: "Torneo no encontrado" });
     }
 
+    if (tournament.status === "closed") {
+    return res.status(403).json({
+      error: "El torneo está finalizado. No se permiten más cambios.",
+    });
+  }
+
     // Todas las series del torneo
-    const allSeries = await Serie.find({ tournament: tournamentId }).sort({ _id: 1 });
+    const allSeries = await Serie.find({ tournament: tournamentId }).sort({
+      _id: 1,
+    });
     if (!allSeries.length) {
       return res.status(404).json({ error: "No hay series para este torneo" });
     }
@@ -251,27 +266,41 @@ router.post("/next-round/:tournamentId", async (req, res) => {
 
     // ===== CASO 2: ya hay eliminatorias -> avanzar ronda
     const currentElim = elimSeries[elimSeries.length - 1];
-    const matches = await Match.find({ serie: currentElim._id, tournament: tournamentId });
+    const matches = await Match.find({
+      serie: currentElim._id,
+      tournament: tournamentId,
+    });
 
     if (!matches.length) {
-      return res.status(400).json({ error: `No hay partidos en "${currentElim.name}"` });
+      return res
+        .status(400)
+        .json({ error: `No hay partidos en "${currentElim.name}"` });
     }
     if (matches.some((m) => !m.winner)) {
-      return res.status(400).json({ error: `No todos los partidos de "${currentElim.name}" están finalizados` });
+      return res.status(400).json({
+        error: `No todos los partidos de "${currentElim.name}" están finalizados`,
+      });
     }
 
     // Ganadores
     const winners = matches.map((m) => m.winner.toString());
 
     // Traer standings
-    const standings = await Standing.find({ serie: currentElim._id, tournament: tournamentId });
+    const standings = await Standing.find({
+      serie: currentElim._id,
+      tournament: tournamentId,
+    });
     const equiposIds = standings.map((s) => s.team.toString());
 
     // Equipos que jugaron realmente
-    const playedTeams = matches.flatMap((m) => [m.teamA.toString(), m.teamB.toString()]);
+    const playedTeams = matches.flatMap((m) => [
+      m.teamA.toString(),
+      m.teamB.toString(),
+    ]);
 
     // Recuperar los byes guardados
-    const byeTeams = currentElim.autoQualified?.map((id) => id.toString()) || [];
+    const byeTeams =
+      currentElim.autoQualified?.map((id) => id.toString()) || [];
 
     // Los que avanzan = ganadores + byes
     const allQualified = [...new Set([...winners, ...byeTeams])];
@@ -379,6 +408,11 @@ router.put("/:id", async (req, res) => {
 
     // Validar que los equipos pertenezcan al torneo
     const torneo = await Tournament.findById(tournament);
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
+    }
     if (!torneo) {
       return res.status(404).json({ error: "Torneo no encontrado" });
     }

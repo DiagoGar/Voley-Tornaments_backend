@@ -12,7 +12,8 @@ const tournamentSchema = new mongoose.Schema({
   teams: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }],
   matches: [{ type: mongoose.Schema.Types.ObjectId, ref: "Match" }],
 
-  owner: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // si hay login
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+
 });
 
 module.exports = mongoose.model("Tournament", tournamentSchema);

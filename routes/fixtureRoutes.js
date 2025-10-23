@@ -1,17 +1,24 @@
 // routes/fixtureRoutes.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Team = require('../models/Team');
-const Match = require('../models/Match');
-const Serie = require('../models/Serie')
+const Team = require("../models/Team");
+const Match = require("../models/Match");
+const Serie = require("../models/Serie");
 
-router.post('/generate', async (req, res) => {
+router.post("/generate", async (req, res) => {
   const { serieId } = req.body;
 
   try {
     const serie = await Serie.findById(serieId).populate("tournament");
     if (!serie) {
       return res.status(404).json({ error: "Serie no encontrada" });
+    }
+
+    const torneo = serie.tournament;
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
     }
 
     const teams = await Team.find({ serie: serieId });
@@ -44,6 +51,5 @@ router.post('/generate', async (req, res) => {
     res.status(500).json({ error: "Error al generar fixture" });
   }
 });
-
 
 module.exports = router;
