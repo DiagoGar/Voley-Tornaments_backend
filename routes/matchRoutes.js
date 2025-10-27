@@ -4,6 +4,7 @@ const Match = require("../models/Match");
 const Standing = require("../models/Standing");
 const Serie = require("../models/Serie");
 const Team = require("../models/Team");
+const Tournament = require("../models/Tournament");
 
 //helper
 const isEliminationName = (name = "") =>
@@ -20,48 +21,93 @@ const sortStandings = (a, b) => {
   return diffB - diffA;
 };
 
+// GET matches con filtro por torneo
 router.get("/", async (req, res) => {
-  const matches = await Match.find().populate([
-    "teamA",
-    "teamB",
-    "serie",
-    "winner",
-  ]);
-  res.json(matches);
+  try {
+    const { tournamentId, serieId } = req.query;
+
+    const filter = {};
+    if (tournamentId) filter.tournament = tournamentId;
+    if (serieId) filter.serie = serieId;
+
+    const matches = await Match.find(filter).populate([
+      "teamA",
+      "teamB",
+      "serie",
+      "tournament",
+      "winner",
+    ]);
+
+    res.json(matches);
+  } catch (error) {
+    console.error("Error al obtener partidos:", error);
+    res.status(500).json({ error: "Error al obtener partidos" });
+  }
 });
 
 router.post("/", async (req, res) => {
   try {
-    const { teamA, teamB, serie, result } = req.body;
+    const { teamA, teamB, serie, tournament, result } = req.body;
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
+    }
 
-    if (!teamA || !teamB || !serie || !result) {
+    if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
     const { pointsA, pointsB } = result;
 
+    // Validar que los equipos pertenecen al torneo
+    const torneo = await Tournament.findById(tournament).populate("teams");
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    const teamIds = torneo.teams.map((t) => t._id.toString());
+
+    if (!teamIds.includes(teamA) || !teamIds.includes(teamB)) {
+      return res
+        .status(400)
+        .json({ error: "Los equipos no pertenecen a este torneo" });
+    }
+
+    // Crear partido
     const match = new Match({
       teamA,
       teamB,
       serie,
+      tournament,
       result: { pointsA, pointsB },
       winner: pointsA > pointsB ? teamA : teamB,
     });
 
     await match.save();
 
+    // Vincular el partido al torneo
+    torneo.matches.push(match._id);
+    await torneo.save();
+
+    // 🔹 Actualizar Standing en el contexto del torneo
     const updateStanding = async (
       teamId,
       pointsFor,
       pointsAgainst,
       isWinner
     ) => {
-      let standing = await Standing.findOne({ team: teamId });
+      let standing = await Standing.findOne({
+        team: teamId,
+        serie,
+        tournament,
+      });
 
       if (!standing) {
         standing = new Standing({
           team: teamId,
-          serie: null,
+          serie,
+          tournament,
           matchesPlayed: 0,
           wins: 0,
           losses: 0,
@@ -96,26 +142,39 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.post("/next-round/:categoryId", async (req, res) => {
+// Avanzar a la siguiente fase de un torneo
+router.post("/next-round/:tournamentId", async (req, res) => {
   try {
-    const { categoryId } = req.params;
+    const { tournamentId } = req.params;
 
-    // Todas las series de la categoría
-    const allSeries = await Serie.find({ category: categoryId })
-      .sort({ _id: 1 })
-      .exec();
+    // Traer torneo con categoría
+    const tournament = await Tournament.findById(tournamentId).populate(
+      "category"
+    );
+    if (!tournament) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    if (tournament.status === "closed") {
+    return res.status(403).json({
+      error: "El torneo está finalizado. No se permiten más cambios.",
+    });
+  }
+
+    // Todas las series del torneo
+    const allSeries = await Serie.find({ tournament: tournamentId }).sort({
+      _id: 1,
+    });
     if (!allSeries.length) {
-      return res
-        .status(404)
-        .json({ error: "No hay series para esta categoría" });
+      return res.status(404).json({ error: "No hay series para este torneo" });
     }
 
     const elimSeries = allSeries.filter((s) => isEliminationName(s.name));
     const groupSeries = allSeries.filter((s) => !isEliminationName(s.name));
 
-    // ===== CASO 1: aún NO hay eliminatorias -> unificar campeones de A, B, ...
+    // ===== CASO 1: aún NO hay eliminatorias -> crear primera fase
     if (elimSeries.length === 0) {
-      // Verificar que TODAS las series de fase regular estén cerradas
+      // Verificar que todas las series regulares estén cerradas
       for (const serie of groupSeries) {
         const openMatch = await Match.findOne({
           serie: serie._id,
@@ -128,17 +187,16 @@ router.post("/next-round/:categoryId", async (req, res) => {
         }
       }
 
-      // Tomar el 1º de cada serie segun standings
+      // Tomar campeones de cada serie
       const winners = [];
       for (const serie of groupSeries) {
         const st = await Standing.find({ serie: serie._id });
         if (!st.length) continue;
         st.sort(sortStandings);
-        winners.push(st[0].team); // ObjectId del equipo campeón de esa serie
+        winners.push(st[0].team);
       }
 
       const uniqueWinners = [...new Set(winners.map((id) => id.toString()))];
-
       if (uniqueWinners.length < 2) {
         if (uniqueWinners.length === 1) {
           return res.json({
@@ -146,14 +204,14 @@ router.post("/next-round/:categoryId", async (req, res) => {
             champion: uniqueWinners[0],
           });
         }
-        return res.status(400).json({
-          error: "No hay suficientes campeones para crear eliminatorias",
-        });
+        return res.status(400).json({ error: "No hay suficientes campeones" });
       }
 
       const nuevaSerie = await Serie.create({
         name: uniqueWinners.length === 2 ? "Final" : "Finales",
-        category: categoryId,
+        tournament: tournamentId,
+        category: tournament.category,
+        autoQualified: [], // inicializamos
       });
 
       await Team.updateMany(
@@ -161,12 +219,13 @@ router.post("/next-round/:categoryId", async (req, res) => {
         { serie: nuevaSerie._id }
       );
 
-      // Crear standings en la nueva serie
+      // Crear standings
       for (const teamId of uniqueWinners) {
         await Standing.create({
           team: teamId,
           serie: nuevaSerie._id,
-          category: categoryId,
+          tournament: tournamentId,
+          category: tournament.category,
           matchesPlayed: 0,
           wins: 0,
           losses: 0,
@@ -176,7 +235,7 @@ router.post("/next-round/:categoryId", async (req, res) => {
         });
       }
 
-      // Generar fixture con lógica de bye
+      // Fixture con bye
       const createdMatches = [];
       const autoWinners = [];
 
@@ -186,56 +245,66 @@ router.post("/next-round/:categoryId", async (req, res) => {
             teamA: uniqueWinners[i],
             teamB: uniqueWinners[i + 1],
             serie: nuevaSerie._id,
+            tournament: tournamentId,
           });
           createdMatches.push(m._id);
         } else {
-          autoWinners.push(uniqueWinners[i]);
+          autoWinners.push(uniqueWinners[i]); // ⬅️ guardamos bye
         }
       }
 
+      nuevaSerie.autoQualified = autoWinners;
+      await nuevaSerie.save();
+
       return res.json({
-        message: `Serie "${nuevaSerie.name}" creada con ${uniqueWinners.length} equipos`,
+        message: `Serie "${nuevaSerie.name}" creada`,
         addedTeams: uniqueWinners.length,
         createdMatches,
         autoQualified: autoWinners,
       });
     }
 
-    // ===== CASO 2: ya hay eliminatorias -> avanzar dentro de ellas
+    // ===== CASO 2: ya hay eliminatorias -> avanzar ronda
     const currentElim = elimSeries[elimSeries.length - 1];
+    const matches = await Match.find({
+      serie: currentElim._id,
+      tournament: tournamentId,
+    });
 
-    const matches = await Match.find({ serie: currentElim._id });
     if (!matches.length) {
       return res
         .status(400)
         .json({ error: `No hay partidos en "${currentElim.name}"` });
     }
     if (matches.some((m) => !m.winner)) {
-      return res
-        .status(400)
-        .json({
-          error: `No todos los partidos de "${currentElim.name}" están finalizados`,
-        });
+      return res.status(400).json({
+        error: `No todos los partidos de "${currentElim.name}" están finalizados`,
+      });
     }
 
-    // Ganadores de los partidos
+    // Ganadores
     const winners = matches.map((m) => m.winner.toString());
 
-    // Standings de esta serie
-    const standings = await Standing.find({ serie: currentElim._id });
+    // Traer standings
+    const standings = await Standing.find({
+      serie: currentElim._id,
+      tournament: tournamentId,
+    });
     const equiposIds = standings.map((s) => s.team.toString());
 
-    // Equipos que efectivamente jugaron esta serie
+    // Equipos que jugaron realmente
     const playedTeams = matches.flatMap((m) => [
       m.teamA.toString(),
       m.teamB.toString(),
     ]);
 
-    // Solo pasan los ganadores y los bye (los que no jugaron esta ronda)
-    const byeTeams = equiposIds.filter((id) => !playedTeams.includes(id));
+    // Recuperar los byes guardados
+    const byeTeams =
+      currentElim.autoQualified?.map((id) => id.toString()) || [];
+
+    // Los que avanzan = ganadores + byes
     const allQualified = [...new Set([...winners, ...byeTeams])];
 
-    // Si ya queda solo un campeón
     if (allQualified.length === 1) {
       return res.json({
         message: "Torneo finalizado. Campeón encontrado",
@@ -260,7 +329,9 @@ router.post("/next-round/:categoryId", async (req, res) => {
 
     const nuevaSerie = await Serie.create({
       name: nextSerieName,
-      category: categoryId,
+      tournament: tournamentId,
+      category: tournament.category,
+      autoQualified: [],
     });
 
     await Team.updateMany(
@@ -268,12 +339,13 @@ router.post("/next-round/:categoryId", async (req, res) => {
       { serie: nuevaSerie._id }
     );
 
-    // Crear standings de la nueva serie
+    // Crear standings
     for (const teamId of allQualified) {
       await Standing.create({
         team: teamId,
         serie: nuevaSerie._id,
-        category: categoryId,
+        tournament: tournamentId,
+        category: tournament.category,
         matchesPlayed: 0,
         wins: 0,
         losses: 0,
@@ -283,7 +355,7 @@ router.post("/next-round/:categoryId", async (req, res) => {
       });
     }
 
-    // Generar fixture con lógica de bye
+    // Fixture con bye
     const createdMatches = [];
     const autoWinners = [];
 
@@ -293,6 +365,7 @@ router.post("/next-round/:categoryId", async (req, res) => {
           teamA: allQualified[i],
           teamB: allQualified[i + 1],
           serie: nuevaSerie._id,
+          tournament: tournamentId,
         });
         createdMatches.push(m._id);
       } else {
@@ -300,8 +373,11 @@ router.post("/next-round/:categoryId", async (req, res) => {
       }
     }
 
+    nuevaSerie.autoQualified = autoWinners;
+    await nuevaSerie.save();
+
     res.json({
-      message: `Serie "${nextSerieName}" creada con ${allQualified.length} equipos`,
+      message: `Serie "${nextSerieName}" creada`,
       addedTeams: allQualified.length,
       createdMatches,
       autoQualified: autoWinners,
@@ -312,72 +388,16 @@ router.post("/next-round/:categoryId", async (req, res) => {
   }
 });
 
-// router.post('/finales/:categoryId', async (req, res) => {
-//   try {
-//     const { categoryId } = req.params;
-
-//     // Buscar todas las series de esta categoría
-//     const series = await Serie.find({ category: categoryId });
-
-//     if (!series.length) {
-//       return res.status(404).json({ error: 'No se encontraron series para esta categoría' });
-//     }
-
-//     let winners = [];
-
-//     // Obtener el primer lugar de cada serie
-//     for (const serie of series) {
-//       const posiciones = await calcularPosiciones(serie._id);
-//       if (posiciones.length > 0) {
-//         winners.push(posiciones[0].teamId); // Solo primer lugar
-//       }
-//     }
-
-//     if (winners.length < 2) {
-//       return res.status(400).json({ error: 'No hay suficientes ganadores para generar finales' });
-//     }
-
-//     const nuevaSerie = await Serie.create({
-//       name: 'Finales',
-//       category: categoryId
-//     });
-
-//     await Promise.all(
-//       winners.map(teamId =>
-//         Team.updateOne({ _id: teamId }, { serie: nuevaSerie._id })
-//       )
-//     );
-
-//     await generarFixture(nuevaSerie._id);
-
-//     res.status(200).json({
-//       message: 'Finales creadas correctamente',
-//       nuevaSerieId: nuevaSerie._id,
-//       addedTeams: winners.length
-//     });
-
-//   } catch (error) {
-//     console.error('Error en /finales:', error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
-
 router.put("/:id", async (req, res) => {
   try {
     const matchId = req.params.id;
-    const { teamA, teamB, serie, result } = req.body;
+    const { teamA, teamB, serie, tournament, result } = req.body;
 
-    if (!teamA || !teamB || !serie || !result) {
+    if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
-    const pointsA = Number(result.pointsA);
-    const pointsB = Number(result.pointsB);
-
-    if (!Number.isFinite(pointsA) || !Number.isFinite(pointsB)) {
-      return res.status(400).json({ error: "Puntajes inválidos" });
-    }
-    if (pointsA === pointsB) {
+    if (result.pointsA === result.pointsB) {
       return res.status(400).json({ error: "No puede haber empate en vóley" });
     }
 
@@ -387,53 +407,69 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ error: "Partido no encontrado" });
     }
 
+    // Validar que los equipos pertenezcan al torneo
+    const torneo = await Tournament.findById(tournament);
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
+    }
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+    if (!torneo.teams.includes(teamA) || !torneo.teams.includes(teamB)) {
+      return res
+        .status(400)
+        .json({ error: "Uno o ambos equipos no pertenecen a este torneo" });
+    }
+
+    // Actualizar partido
     existingMatch.teamA = teamA;
     existingMatch.teamB = teamB;
     existingMatch.serie = serie;
-    existingMatch.result = { pointsA, pointsB };
-    existingMatch.winner = pointsA > pointsB ? teamA : teamB;
+    existingMatch.tournament = tournament;
+    existingMatch.result = result;
+    existingMatch.winner = result.pointsA > result.pointsB ? teamA : teamB;
     await existingMatch.save();
 
-    // 2) Recalcular standings de TODA la serie sin borrar los existentes
-    //    (así preservamos al equipo con bye)
-    // 2a) Arrancar de todos los equipos que pertenecen a la serie (incluye los del bye)
-    const teamsInSerie = await Team.find({ serie }).select("_id");
-    const teamIds = teamsInSerie.map((t) => t._id.toString());
+    // Recalcular standings de la serie dentro del torneo
+    const matches = await Match.find({ serie, tournament });
+    await Standing.deleteMany({ serie, tournament });
 
-    // 2b) Asegurar también los que aparezcan en partidos (por si acaso)
-    const playedMatches = await Match.find({
-      serie,
-      "result.pointsA": { $exists: true },
-      "result.pointsB": { $exists: true },
-    }).select("teamA teamB result");
+    for (const match of matches) {
+      if (!match.result) continue; // partidos aún sin resultado
 
-    for (const m of playedMatches) {
-      const a = m.teamA.toString();
-      const b = m.teamB.toString();
-      if (!teamIds.includes(a)) teamIds.push(a);
-      if (!teamIds.includes(b)) teamIds.push(b);
-    }
+      const teamAStanding =
+        (await Standing.findOne({ team: match.teamA, serie, tournament })) ||
+        new Standing({
+          team: match.teamA,
+          serie,
+          tournament,
+          matchesPlayed: 0,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          points: 0,
+        });
 
-    // 2c) Inicializar totales incluyendo equipos sin partidos (bye)
-    const totals = {};
-    for (const id of teamIds) {
-      totals[id] = {
-        matchesPlayed: 0,
-        wins: 0,
-        losses: 0,
-        pointsFor: 0,
-        pointsAgainst: 0,
-        points: 0,
-      };
-    }
+      const teamBStanding =
+        (await Standing.findOne({ team: match.teamB, serie, tournament })) ||
+        new Standing({
+          team: match.teamB,
+          serie,
+          tournament,
+          matchesPlayed: 0,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          points: 0,
+        });
 
-    // 2d) Acumular con todos los partidos cerrados de la serie
-    for (const m of playedMatches) {
-      const a = m.teamA.toString();
-      const b = m.teamB.toString();
-      const aPts = Number(m.result?.pointsA ?? 0);
-      const bPts = Number(m.result?.pointsB ?? 0);
-      if (!Number.isFinite(aPts) || !Number.isFinite(bPts)) continue;
+      // Actualizar estadísticas
+      teamAStanding.matchesPlayed += 1;
+      teamBStanding.matchesPlayed += 1;
 
       totals[a].matchesPlayed += 1;
       totals[b].matchesPlayed += 1;
@@ -457,17 +493,7 @@ router.put("/:id", async (req, res) => {
       }
     }
 
-    // 2e) Upsert por equipo+serie (NO borrar nada)
-    const ops = Object.entries(totals).map(([teamId, s]) => ({
-      updateOne: {
-        filter: { team: teamId, serie },
-        update: { $set: { team: teamId, serie, ...s } },
-        upsert: true,
-      },
-    }));
-    await Standing.bulkWrite(ops);
-
-    return res.json({
+    res.json({
       message: "Partido actualizado y standings recalculados correctamente",
     });
   } catch (err) {
