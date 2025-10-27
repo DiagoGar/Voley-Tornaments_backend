@@ -401,6 +401,7 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: "No puede haber empate en vóley" });
     }
 
+    // 1) Actualizar el partido
     const existingMatch = await Match.findById(matchId);
     if (!existingMatch) {
       return res.status(404).json({ error: "Partido no encontrado" });
@@ -470,26 +471,26 @@ router.put("/:id", async (req, res) => {
       teamAStanding.matchesPlayed += 1;
       teamBStanding.matchesPlayed += 1;
 
-      teamAStanding.pointsFor += match.result.pointsA;
-      teamAStanding.pointsAgainst += match.result.pointsB;
+      totals[a].matchesPlayed += 1;
+      totals[b].matchesPlayed += 1;
 
-      teamBStanding.pointsFor += match.result.pointsB;
-      teamBStanding.pointsAgainst += match.result.pointsA;
+      totals[a].pointsFor += aPts;
+      totals[a].pointsAgainst += bPts;
 
-      if (match.result.pointsA > match.result.pointsB) {
-        teamAStanding.wins += 1;
-        teamAStanding.points += 3;
-        teamBStanding.losses += 1;
-        teamBStanding.points += 1;
+      totals[b].pointsFor += bPts;
+      totals[b].pointsAgainst += aPts;
+
+      if (aPts > bPts) {
+        totals[a].wins += 1;
+        totals[a].points += 3;
+        totals[b].losses += 1;
+        totals[b].points += 1;
       } else {
-        teamBStanding.wins += 1;
-        teamBStanding.points += 3;
-        teamAStanding.losses += 1;
-        teamAStanding.points += 1;
+        totals[b].wins += 1;
+        totals[b].points += 3;
+        totals[a].losses += 1;
+        totals[a].points += 1;
       }
-
-      await teamAStanding.save();
-      await teamBStanding.save();
     }
 
     res.json({
