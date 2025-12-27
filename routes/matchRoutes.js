@@ -471,26 +471,38 @@ router.put("/:id", async (req, res) => {
       teamAStanding.matchesPlayed += 1;
       teamBStanding.matchesPlayed += 1;
 
-      totals[a].matchesPlayed += 1;
-      totals[b].matchesPlayed += 1;
+      const aPts = match.result.pointsA;
+      const bPts = match.result.pointsB;
 
-      totals[a].pointsFor += aPts;
-      totals[a].pointsAgainst += bPts;
+      // Partidos jugados
+      teamAStanding.matchesPlayed += 1;
+      teamBStanding.matchesPlayed += 1;
 
-      totals[b].pointsFor += bPts;
-      totals[b].pointsAgainst += aPts;
+      // Puntos a favor / en contra
+      teamAStanding.pointsFor += aPts;
+      teamAStanding.pointsAgainst += bPts;
 
+      teamBStanding.pointsFor += bPts;
+      teamBStanding.pointsAgainst += aPts;
+
+      // Victorias / derrotas / puntos
       if (aPts > bPts) {
-        totals[a].wins += 1;
-        totals[a].points += 3;
-        totals[b].losses += 1;
-        totals[b].points += 1;
+        teamAStanding.wins += 1;
+        teamAStanding.points += 3;
+
+        teamBStanding.losses += 1;
+        teamBStanding.points += 1;
       } else {
-        totals[b].wins += 1;
-        totals[b].points += 3;
-        totals[a].losses += 1;
-        totals[a].points += 1;
+        teamBStanding.wins += 1;
+        teamBStanding.points += 3;
+
+        teamAStanding.losses += 1;
+        teamAStanding.points += 1;
       }
+
+      // Guardar standings
+      await teamAStanding.save();
+      await teamBStanding.save();
     }
 
     res.json({
