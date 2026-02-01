@@ -36,6 +36,14 @@ router.post("/", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "Torneo no encontrado" });
     }
 
+    // Validar que la cantidad de jugadores coincida con el teamSize del torneo
+    const playersCount = players ? players.length : 0;
+    if (playersCount > torneo.teamSize) {
+      return res.status(400).json({ 
+        error: `No puedes agregar más de ${torneo.teamSize} jugadores. Este torneo es de ${torneo.teamSize} miembros por equipo.` 
+      });
+    }
+
     if (torneo.status === "closed") {
       return res
         .status(403)

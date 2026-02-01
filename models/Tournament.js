@@ -6,6 +6,12 @@ const tournamentSchema = new mongoose.Schema({
   status: { type: String, enum: ["open", "closed"], default: "open" }, // estado del torneo
   createdAt: { type: Date, default: Date.now },
   finishedAt: { type: Date },
+  teamSize: {
+  type: Number,
+  enum: [2, 4, 6],
+  default: 6
+},
+
 
   // relaciones
   series: [{ type: mongoose.Schema.Types.ObjectId, ref: "Serie" }],

@@ -48,11 +48,6 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { teamA, teamB, serie, tournament, result } = req.body;
-    if (torneo.status === "closed") {
-      return res.status(403).json({
-        error: "El torneo está finalizado. No se permiten más cambios.",
-      });
-    }
 
     if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
@@ -64,6 +59,12 @@ router.post("/", async (req, res) => {
     const torneo = await Tournament.findById(tournament).populate("teams");
     if (!torneo) {
       return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo está finalizado. No se permiten más cambios.",
+      });
     }
 
     const teamIds = torneo.teams.map((t) => t._id.toString());

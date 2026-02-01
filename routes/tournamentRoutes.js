@@ -7,13 +7,23 @@ const authMiddleware = require("../middlewares/authMiddleware.js");
 // Crear torneo
 router.post("/", authMiddleware, async (req, res) => {
   try {
-    const { name, category } = req.body;
+    const { name, category, teamSize } = req.body;
 
     if (!category) {
       return res.status(400).json({ error: "La categoría es obligatoria" });
     }
 
-    const torneo = new Tournament({ name, category, user: req.user._id });
+    // Validación del tamaño del equipo
+    if (teamSize && ![2, 4, 6].includes(teamSize)) {
+      return res.status(400).json({ error: "El tamaño del equipo debe ser 2, 4 o 6" });
+    }
+
+    const torneo = new Tournament({ 
+      name, 
+      category, 
+      teamSize: teamSize || 6,
+      user: req.user._id 
+    });
     await torneo.save();
     res.status(201).json(torneo);
   } catch (error) {
