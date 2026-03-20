@@ -14,16 +14,29 @@ const auth = require('./routes/auth')
 
 const app = express();
 
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 const corsConfig = {
-    credentials: true,
-    origin: true,
+  credentials: true,
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length === 0) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
 };
 app.use(cors(corsConfig));
+app.options('*', cors(corsConfig));
 
 app.use(express.json())
 app.use(cookieParser())
 
-connectDB();
+connectDB().catch((err) => {
+  console.error('MongoDB connection failed:', err);
+});
 
 app.use('/api/categories', categoriesRouter);
 app.use('/api/series', seriesRouter);
