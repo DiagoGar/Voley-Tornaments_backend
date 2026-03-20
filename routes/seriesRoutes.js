@@ -26,12 +26,15 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
-    const torneo = Tournament.findById(tournament)
+    const torneo = await Tournament.findById(tournament);
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
     if (torneo.status === "closed") {
       return res
         .status(403)
         .json({
-          error: "El torneo está finalizado. No se permiten más cambios.",
+          error: "El torneo esta finalizado. No se permiten mas cambios.",
         });
     }
 
@@ -54,14 +57,25 @@ router.post("/", async (req, res) => {
 });
 
 router.delete("/:id", async (req, res) => {
-  if (torneo.status === "closed") {
-    return res
-      .status(403)
-      .json({
-        error: "El torneo está finalizado. No se permiten más cambios.",
-      });
-  }
   try {
+    const serie = await Serie.findById(req.params.id);
+    if (!serie) {
+      return res.status(404).json({ error: "Serie no encontrada" });
+    }
+
+    const torneo = await Tournament.findById(serie.tournament);
+    if (!torneo) {
+      return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    if (torneo.status === "closed") {
+      return res
+        .status(403)
+        .json({
+          error: "El torneo esta finalizado. No se permiten mas cambios.",
+        });
+    }
+
     await Serie.findByIdAndDelete(req.params.id);
     res.json({ message: "Serie eliminada" });
   } catch (err) {

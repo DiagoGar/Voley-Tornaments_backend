@@ -48,22 +48,25 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { teamA, teamB, serie, tournament, result } = req.body;
-    if (torneo.status === "closed") {
-      return res.status(403).json({
-        error: "El torneo está finalizado. No se permiten más cambios.",
-      });
-    }
-
     if (!teamA || !teamB || !serie || !tournament || !result) {
       return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
     const { pointsA, pointsB } = result;
+    if (pointsA === pointsB) {
+      return res.status(400).json({ error: "El partido no puede terminar en empate" });
+    }
 
     // Validar que los equipos pertenecen al torneo
     const torneo = await Tournament.findById(tournament).populate("teams");
     if (!torneo) {
       return res.status(404).json({ error: "Torneo no encontrado" });
+    }
+
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo esta finalizado. No se permiten mas cambios.",
+      });
     }
 
     const teamIds = torneo.teams.map((t) => t._id.toString());
@@ -157,7 +160,7 @@ router.post("/next-round/:tournamentId", async (req, res) => {
 
     if (tournament.status === "closed") {
       return res.status(403).json({
-        error: "El torneo está finalizado. No se permiten más cambios.",
+        error: "El torneo esta finalizado. No se permiten mas cambios.",
       });
     }
 
@@ -409,21 +412,20 @@ router.put("/:id", async (req, res) => {
 
     // Validar que los equipos pertenezcan al torneo
     const torneo = await Tournament.findById(tournament);
-    if (torneo.status === "closed") {
-      return res.status(403).json({
-        error: "El torneo está finalizado. No se permiten más cambios.",
-      });
-    }
     if (!torneo) {
       return res.status(404).json({ error: "Torneo no encontrado" });
     }
-    if (!torneo.teams.includes(teamA) || !torneo.teams.includes(teamB)) {
+    if (torneo.status === "closed") {
+      return res.status(403).json({
+        error: "El torneo esta finalizado. No se permiten mas cambios.",
+      });
+    }
+    const torneoTeamIds = torneo.teams.map((t) => t.toString());
+    if (!torneoTeamIds.includes(teamA) || !torneoTeamIds.includes(teamB)) {
       return res
         .status(400)
         .json({ error: "Uno o ambos equipos no pertenecen a este torneo" });
-    }
-
-    // Actualizar partido
+    }    // Actualizar partido
     existingMatch.teamA = teamA;
     existingMatch.teamB = teamB;
     existingMatch.serie = serie;
@@ -468,8 +470,6 @@ router.put("/:id", async (req, res) => {
         });
 
       // Actualizar estadísticas
-      teamAStanding.matchesPlayed += 1;
-      teamBStanding.matchesPlayed += 1;
 
       const aPts = match.result.pointsA;
       const bPts = match.result.pointsB;
