@@ -4,6 +4,7 @@ const tournamentSchema = new mongoose.Schema({
   name: { type: String, required: true }, // Ej: "Torneo Apertura 2025"
   category: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "Category" }, // opcional
   status: { type: String, enum: ["open", "closed"], default: "open" }, // estado del torneo
+  teamSize: { type: Number, enum: [2, 4, 6], default: 2 }, // tamaño del equipo: 2 (duplas), 4 (cuartetas), 6 (sextetas)
   createdAt: { type: Date, default: Date.now },
   finishedAt: { type: Date },
 
