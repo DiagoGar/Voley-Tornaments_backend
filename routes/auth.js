@@ -47,7 +47,9 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    
     const user = await User.findOne({ email });
+    
 
     if (!user) return res.status(400).json({ error: 'Usuario no encontrado' });
 
@@ -64,7 +66,7 @@ router.post('/login', async (req, res) => {
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production', // usar HTTPS en producción
-      sameSite: 'none',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000, // 1 día
     });
 
@@ -83,7 +85,7 @@ router.post('/logout', (req, res) => {
   res.clearCookie('token', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production', // usar HTTPS en producción
-    sameSite: 'none',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000, // 1 día
   });
   res.json({ message: 'Sesión cerrada' });
@@ -93,6 +95,7 @@ router.post('/logout', (req, res) => {
 router.get('/verify', async (req, res) => {
   try {
     const token = req.cookies?.token;
+    
     if (!token) return res.status(401).json({ loggedIn: false });
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
