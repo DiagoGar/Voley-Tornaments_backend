@@ -42,8 +42,14 @@ app.options(/.*/, cors(corsConfig));
 app.use(express.json())
 app.use(cookieParser())
 
-connectDB().catch((err) => {
-  console.error('MongoDB connection failed:', err);
+app.use('/api', async (req, res, next) => {
+  try {
+    await connectDB();
+    return next();
+  } catch (err) {
+    console.error('MongoDB connection failed:', err);
+    return res.status(503).json({ error: 'Database unavailable' });
+  }
 });
 
 app.use('/api/categories', categoriesRouter);
